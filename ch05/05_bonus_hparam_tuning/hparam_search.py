@@ -82,11 +82,13 @@ def train_model(model, train_loader, val_loader, optimizer, device,
             global_step += 1
 
             # Warmup: adjust learning rate linearly
+            # 预测阶段，学习率从initial_lr线性增加到max_lr
             if global_step <= warmup_iters:
                 lr = initial_lr + global_step * lr_increment
             # Cosine annealing phase
             else:
                 progress = (global_step - warmup_iters) / (total_training_iters - warmup_iters)
+                # 余弦退火：during the training process, lr deseacing from max_lr to min_lr
                 lr = min_lr + (max_lr - min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
 
             # Apply the calculated learning rate

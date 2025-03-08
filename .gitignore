@@ -283,3 +283,4 @@ cython_debug/
 
 # vscode
 .vscode/
+ch05/01_main-chapter-code/wikitext/wikitext-2-raw-v1
