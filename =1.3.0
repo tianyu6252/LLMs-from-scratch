@@ -1,0 +1,14 @@
+Looking in indexes: http://mirrors.aliyun.com/pypi/simple
+Collecting scikit-learn
+  Downloading http://mirrors.aliyun.com/pypi/packages/b7/91/ab3c697188f224d658969f678be86b0968ccc52774c8ab4a86a07be13c25/scikit_learn-1.6.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (13.5 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.5/13.5 MB 174.1 MB/s eta 0:00:00
+Requirement already satisfied: numpy>=1.19.5 in /root/miniconda3/envs/llm/lib/python3.10/site-packages (from scikit-learn) (1.26.4)
+Collecting scipy>=1.6.0 (from scikit-learn)
+  Downloading http://mirrors.aliyun.com/pypi/packages/de/3c/c96d904b9892beec978562f64d8cc43f9cca0842e65bd3cd1b7f7389b0ba/scipy-1.15.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (37.6 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 37.6/37.6 MB 212.9 MB/s eta 0:00:00
+Collecting joblib>=1.2.0 (from scikit-learn)
+  Downloading http://mirrors.aliyun.com/pypi/packages/91/29/df4b9b42f2be0b623cbd5e2140cafcaa2bef0759a00b7b70104dcfe2fb51/joblib-1.4.2-py3-none-any.whl (301 kB)
+Collecting threadpoolctl>=3.1.0 (from scikit-learn)
+  Downloading http://mirrors.aliyun.com/pypi/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl (18 kB)
+Installing collected packages: threadpoolctl, scipy, joblib, scikit-learn
+Successfully installed joblib-1.4.2 scikit-learn-1.6.1 scipy-1.15.2 threadpoolctl-3.6.0
