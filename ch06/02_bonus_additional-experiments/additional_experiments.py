@@ -21,6 +21,14 @@ from gpt_download import download_and_load_gpt2
 from previous_chapters import GPTModel, load_weights_into_gpt
 
 
+# If the `previous_chapters.py` file is not available locally,
+# you can import it from the `llms-from-scratch` PyPI package.
+# For details, see: https://github.com/rasbt/LLMs-from-scratch/tree/main/pkg
+# E.g.,
+# from llms_from_scratch.ch04 import GPTModel
+# from llms_from_scratch.ch05 import download_and_load_gpt2, load_weights_into_gpt
+
+
 class LoRALayer(torch.nn.Module):
     def __init__(self, in_dim, out_dim, rank, alpha):
         super().__init__()
@@ -603,7 +611,12 @@ if __name__ == "__main__":
     all_exist = all((base_path / file_name).exists() for file_name in file_names)
 
     if not all_exist:
-        download_and_unzip(url, zip_path, extract_to, new_file_path)
+        try:
+            download_and_unzip(url, zip_path, extract_to, new_file_path)
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+            print(f"Primary URL failed: {e}. Trying backup URL...")
+            backup_url = "https://f001.backblazeb2.com/file/LLMs-from-scratch/sms%2Bspam%2Bcollection.zip"
+            download_and_unzip(backup_url, zip_path, extract_to, new_file_path)
         create_dataset_csvs(new_file_path)
 
     tokenizer = tiktoken.get_encoding("gpt2")

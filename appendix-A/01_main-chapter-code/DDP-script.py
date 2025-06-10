@@ -31,12 +31,11 @@ def ddp_setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
     # any free port on the machine
     os.environ["MASTER_PORT"] = "12345"
-    if platform.system() == "Windows":
-        # Disable libuv because PyTorch for Windows isn't built with support
-        os.environ["USE_LIBUV"] = "0"
 
     # initialize process group
     if platform.system() == "Windows":
+        # Disable libuv because PyTorch for Windows isn't built with support
+        os.environ["USE_LIBUV"] = "0"
         # Windows users may have to use "gloo" instead of "nccl" as backend
         # gloo: Facebook Collective Communication Library
         init_process_group(backend="gloo", rank=rank, world_size=world_size)
@@ -99,6 +98,13 @@ def prepare_dataset():
     ])
     y_test = torch.tensor([0, 1])
 
+    # Uncomment these lines to increase the dataset size to run this script on up to 8 GPUs:
+    # factor = 4
+    # X_train = torch.cat([X_train + torch.randn_like(X_train) * 0.1 for _ in range(factor)])
+    # y_train = y_train.repeat(factor)
+    # X_test = torch.cat([X_test + torch.randn_like(X_test) * 0.1 for _ in range(factor)])
+    # y_test = y_test.repeat(factor)
+
     train_ds = ToyDataset(X_train, y_train)
     test_ds = ToyDataset(X_test, y_test)
 
@@ -153,10 +159,22 @@ def main(rank, world_size, num_epochs):
                   f" | Train/Val Loss: {loss:.2f}")
 
     model.eval()
-    train_acc = compute_accuracy(model, train_loader, device=rank)
-    print(f"[GPU{rank}] Training accuracy", train_acc)
-    test_acc = compute_accuracy(model, test_loader, device=rank)
-    print(f"[GPU{rank}] Test accuracy", test_acc)
+
+    try:
+        train_acc = compute_accuracy(model, train_loader, device=rank)
+        print(f"[GPU{rank}] Training accuracy", train_acc)
+        test_acc = compute_accuracy(model, test_loader, device=rank)
+        print(f"[GPU{rank}] Test accuracy", test_acc)
+
+    ####################################################
+    # NEW (not in the book):
+    except ZeroDivisionError as e:
+        raise ZeroDivisionError(
+            f"{e}\n\nThis script is designed for 2 GPUs. You can run it as:\n"
+            "CUDA_VISIBLE_DEVICES=0,1 python DDP-script.py\n"
+            f"Or, to run it on {torch.cuda.device_count()} GPUs, uncomment the code on lines 103 to 107."
+        )
+    ####################################################
 
     destroy_process_group()  # NEW: cleanly exit distributed mode
 
@@ -179,10 +197,11 @@ def compute_accuracy(model, dataloader, device):
 
 
 if __name__ == "__main__":
+    # This script may not work for GPUs > 2 due to the small dataset
+    # Run `CUDA_VISIBLE_DEVICES=0,1 python DDP-script.py` if you have GPUs > 2
     print("PyTorch version:", torch.__version__)
     print("CUDA available:", torch.cuda.is_available())
     print("Number of GPUs available:", torch.cuda.device_count())
-
     torch.manual_seed(123)
 
     # NEW: spawn new processes

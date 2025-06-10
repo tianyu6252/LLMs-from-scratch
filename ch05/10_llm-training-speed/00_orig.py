@@ -3,16 +3,16 @@
 #   - https://www.manning.com/books/build-a-large-language-model-from-scratch
 # Code: https://github.com/rasbt/LLMs-from-scratch
 
-# This file collects all the relevant code that we covered thus far
-# throughout Chapters 2-4.
-# This file can be run as a standalone script.
 
-import tiktoken
+import os
+import time
+import urllib.request
+
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+import tiktoken
 
 #####################################
 # Chapter 2
@@ -24,8 +24,10 @@ class GPTDatasetV1(Dataset):
         self.input_ids = []
         self.target_ids = []
 
-        token_ids = tokenizer.encode(txt, allowed_special={'<|endoftext|>'})
+        # Tokenize the entire text
+        token_ids = tokenizer.encode(txt, allowed_special={"<|endoftext|>"})
 
+        # Use a sliding window to chunk the book into overlapping sequences of max_length
         for i in range(0, len(token_ids) - max_length, stride):
             input_chunk = token_ids[i:i + max_length]
             target_chunk = token_ids[i + 1: i + max_length + 1]
@@ -41,8 +43,13 @@ class GPTDatasetV1(Dataset):
 
 def create_dataloader_v1(txt, batch_size=4, max_length=256,
                          stride=128, shuffle=True, drop_last=True, num_workers=0):
+    # Initialize the tokenizer
     tokenizer = tiktoken.get_encoding("gpt2")
+
+    # Create dataset
     dataset = GPTDatasetV1(txt, tokenizer, max_length, stride)
+
+    # Create dataloader
     dataloader = DataLoader(
         dataset, batch_size=batch_size, shuffle=shuffle, drop_last=drop_last, num_workers=num_workers)
 
@@ -52,7 +59,6 @@ def create_dataloader_v1(txt, batch_size=4, max_length=256,
 #####################################
 # Chapter 3
 #####################################
-
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
         super().__init__()
@@ -67,7 +73,7 @@ class MultiHeadAttention(nn.Module):
         self.W_value = nn.Linear(d_in, d_out, bias=qkv_bias)
         self.out_proj = nn.Linear(d_out, d_out)  # Linear layer to combine head outputs
         self.dropout = nn.Dropout(dropout)
-        self.register_buffer('mask', torch.triu(torch.ones(context_length, context_length), diagonal=1))
+        self.register_buffer("mask", torch.triu(torch.ones(context_length, context_length), diagonal=1))
 
     def forward(self, x):
         b, num_tokens, d_in = x.shape
@@ -112,7 +118,6 @@ class MultiHeadAttention(nn.Module):
 #####################################
 # Chapter 4
 #####################################
-
 class LayerNorm(nn.Module):
     def __init__(self, emb_dim):
         super().__init__()
@@ -234,10 +239,20 @@ def generate_text_simple(model, idx, max_new_tokens, context_size):
 
     return idx
 
-
 #####################################
 # Chapter 5
-####################################
+#####################################
+
+
+def text_to_token_ids(text, tokenizer):
+    encoded = tokenizer.encode(text)
+    encoded_tensor = torch.tensor(encoded).unsqueeze(0)  # add batch dimension
+    return encoded_tensor
+
+
+def token_ids_to_text(token_ids, tokenizer):
+    flat = token_ids.squeeze(0)  # remove batch dimension
+    return tokenizer.decode(flat.tolist())
 
 
 def calc_loss_batch(input_batch, target_batch, model, device):
@@ -280,13 +295,96 @@ def generate_and_print_sample(model, tokenizer, device, start_context):
     with torch.no_grad():
         token_ids = generate_text_simple(
             model=model, idx=encoded,
-            max_new_tokens=50, context_size=context_size)
+            max_new_tokens=50, context_size=context_size
+        )
         decoded_text = token_ids_to_text(token_ids, tokenizer)
         print(decoded_text.replace("\n", " "))  # Compact print format
     model.train()
 
 
-def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses, output_dir):
+def train_model_simple_with_timing(model, train_loader, val_loader, optimizer, device,
+                                   num_epochs, eval_freq, eval_iter, start_context, tokenizer):
+    train_losses, val_losses, track_tokens = [], [], []
+    total_tokens, global_step, last_tokens = 0, -1, 0
+
+    # Variables for cumulative average tokens/sec
+    cumulative_tokens, cumulative_time = 0.0, 0.0
+
+    # CUDA-specific timing setup
+    use_cuda = device.type == "cuda"
+    if use_cuda:
+        t_start = torch.cuda.Event(enable_timing=True)
+        t_end = torch.cuda.Event(enable_timing=True)
+        torch.cuda.synchronize()  # Ensure all prior CUDA operations are done
+        t_start.record()          # Start the timer for the first interval
+    else:
+        t0 = time.time()          # Start the timer for the first interval
+
+    # Main training loop
+    for epoch in range(num_epochs):
+        model.train()
+        for inp_batch, tgt_batch in train_loader:
+            optimizer.zero_grad()
+            global_step += 1
+
+            # Forward and backward pass
+            loss = calc_loss_batch(inp_batch, tgt_batch, model, device)
+            loss.backward()
+            optimizer.step()
+
+            total_tokens += inp_batch.numel()
+
+            # At evaluation intervals, measure elapsed time and tokens per second
+            if global_step % eval_freq == 0:
+                # End timing for the current interval
+                if use_cuda:
+                    t_end.record()
+                    torch.cuda.synchronize()  # Wait for all CUDA ops to complete.
+                    elapsed = t_start.elapsed_time(t_end) / 1000  # Convert ms to seconds
+                    t_start.record()  # Reset timer for the next interval
+                else:
+                    elapsed = time.time() - t0
+                    t0 = time.time()  # Reset timer for the next interval
+
+                # Calculate tokens processed in this interval
+                tokens_interval = total_tokens - last_tokens
+                last_tokens = total_tokens
+                tps = tokens_interval / elapsed if elapsed > 0 else 0  # Tokens per second
+
+                # Update cumulative counters (skip the first evaluation interval)
+                if global_step:  # This is False only when global_step == 0 (first evaluation)
+                    cumulative_tokens += tokens_interval
+                    cumulative_time += elapsed
+
+                # Compute cumulative average tokens/sec (excluding the first interval)
+                avg_tps = cumulative_tokens / cumulative_time if cumulative_time > 0 else 0
+
+                # Evaluate model performance (this may add overhead)
+                train_loss, val_loss = evaluate_model(model, train_loader, val_loader, device, eval_iter)
+                train_losses.append(train_loss)
+                val_losses.append(val_loss)
+                track_tokens.append(total_tokens)
+
+                print(f"Ep {epoch+1}, Step {global_step:06d}, "
+                      f"Train: {train_loss:.3f}, Val: {val_loss:.3f}, "
+                      f"Step tok/sec: {round(tps)}, Avg tok/sec: {round(avg_tps)}")
+
+        generate_and_print_sample(model, tokenizer, device, start_context)
+
+        # Memory stats
+        if torch.cuda.is_available():
+            device = torch.cuda.current_device()
+
+            allocated = torch.cuda.memory_allocated(device) / 1024**3  # Convert to GB
+            reserved = torch.cuda.memory_reserved(device) / 1024**3  # Convert to GB
+
+            print(f"\nAllocated memory: {allocated:.4f} GB")
+            print(f"Reserved memory: {reserved:.4f} GB\n")
+
+    return train_losses, val_losses, track_tokens
+
+
+def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses):
     fig, ax1 = plt.subplots()
 
     # Plot training and validation loss against epochs
@@ -295,7 +393,6 @@ def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses, output_dir):
     ax1.set_xlabel("Epochs")
     ax1.set_ylabel("Loss")
     ax1.legend(loc="upper right")
-    ax1.xaxis.set_major_locator(MaxNLocator(integer=True))
 
     # Create a second x-axis for tokens seen
     ax2 = ax1.twiny()  # Create a second x-axis that shares the same y-axis
@@ -303,15 +400,134 @@ def plot_losses(epochs_seen, tokens_seen, train_losses, val_losses, output_dir):
     ax2.set_xlabel("Tokens seen")
 
     fig.tight_layout()  # Adjust layout to make room
-    plt.savefig(output_dir / "losses.pdf")
+    # plt.show()
 
 
-def text_to_token_ids(text, tokenizer):
-    encoded = tokenizer.encode(text, allowed_special={'<|endoftext|>'})
-    encoded_tensor = torch.tensor(encoded).unsqueeze(0)  # Add batch dimension
-    return encoded_tensor
+#####################################
+# Main function calls
+#####################################
+
+def main(gpt_config, settings):
+
+    torch.manual_seed(123)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"Using {device}")
+    if torch.cuda.is_available():
+        print(f"CUDA version: {torch.version.cuda}")
+    print()
+
+    ##############################
+    # Download data if necessary
+    ##############################
+
+    file_path = "middlemarch.txt"
+    url = "https://www.gutenberg.org/cache/epub/145/pg145.txt"
+
+    if not os.path.exists(file_path):
+        with urllib.request.urlopen(url) as response:
+            text_data = response.read().decode('utf-8')
+        with open(file_path, "w", encoding="utf-8") as file:
+            file.write(text_data)
+    else:
+        with open(file_path, "r", encoding="utf-8") as file:
+            text_data = file.read()
+
+    ##############################
+    # Initialize model
+    ##############################
+
+    model = GPTModel(gpt_config)
+    model.to(device)  # no assignment model = model.to(device) necessary for nn.Module classes
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=settings["learning_rate"], weight_decay=settings["weight_decay"]
+    )
+
+    ##############################
+    # Set up dataloaders
+    ##############################
+
+    # Train/validation ratio
+    train_ratio = 0.90
+    split_idx = int(train_ratio * len(text_data))
+
+    train_loader = create_dataloader_v1(
+        text_data[:split_idx],
+        batch_size=settings["batch_size"],
+        max_length=gpt_config["context_length"],
+        stride=gpt_config["context_length"],
+        drop_last=True,
+        shuffle=True,
+        num_workers=4
+    )
+
+    val_loader = create_dataloader_v1(
+        text_data[split_idx:],
+        batch_size=settings["batch_size"],
+        max_length=gpt_config["context_length"],
+        stride=gpt_config["context_length"],
+        drop_last=False,
+        shuffle=False,
+        num_workers=4
+    )
+
+    ##############################
+    # Train model
+    ##############################
+
+    tokenizer = tiktoken.get_encoding("gpt2")
+
+    train_losses, val_losses, tokens_seen = train_model_simple_with_timing(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=optimizer,
+        device=device,
+        num_epochs=settings["num_epochs"],
+        eval_freq=15,
+        eval_iter=1,
+        start_context="Every effort moves you",
+        tokenizer=tokenizer
+    )
+
+    return train_losses, val_losses, tokens_seen, model
 
 
-def token_ids_to_text(token_ids, tokenizer):
-    flat = token_ids.squeeze(0)  # Remove batch dimension
-    return tokenizer.decode(flat.tolist())
+if __name__ == "__main__":
+
+    GPT_CONFIG_124M = {
+        "vocab_size": 50257,     # Vocabulary size
+        "context_length": 1024,  # Input tokens per training example
+        "emb_dim": 768,          # Embedding dimension
+        "n_heads": 12,           # Number of attention heads
+        "n_layers": 12,          # Number of layers
+        "drop_rate": 0.1,        # Dropout rate
+        "qkv_bias": False        # Query-key-value bias
+    }
+
+    OTHER_SETTINGS = {
+        "learning_rate": 5e-4,
+        "num_epochs": 15,
+        "batch_size": 8,
+        "weight_decay": 0.1
+    }
+
+    ###########################
+    # Initiate training
+    ###########################
+
+    train_losses, val_losses, tokens_seen, model = main(GPT_CONFIG_124M, OTHER_SETTINGS)
+
+    ###########################
+    # After training
+    ###########################
+
+    # Plot results
+    epochs_tensor = torch.linspace(0, OTHER_SETTINGS["num_epochs"], len(train_losses))
+    plot_losses(epochs_tensor, tokens_seen, train_losses, val_losses)
+    plt.savefig("loss.pdf")
+
+    # Save and load model
+    # torch.save(model.state_dict(), "model.pth")
+    # model = GPTModel(GPT_CONFIG_124M)
+    # model.load_state_dict(torch.load("model.pth", weights_only=True))
